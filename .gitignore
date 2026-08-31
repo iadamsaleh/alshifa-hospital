@@ -1,0 +1,10 @@
+node_modules/
+client/node_modules/
+server/node_modules/
+electron/node_modules/
+*.db
+*.db-journal
+.env
+dist/
+build/
+.DS_Store

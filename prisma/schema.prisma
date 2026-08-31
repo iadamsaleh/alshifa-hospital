@@ -1,0 +1,286 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// SQLite has no native enum type in Prisma, so "enum-like" fields below
+// are plain Strings — the allowed values are documented in a comment
+// next to each field and should be enforced at the application layer.
+
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  password  String // hashed, never store plaintext
+  role      String   @default("RECEPTIONIST") // ADMIN | DOCTOR | RECEPTIONIST | LAB_ASSISTANT
+  createdAt DateTime @default(now())
+  doctor    Doctor?
+}
+
+model Doctor {
+  id               Int      @id @default(autoincrement())
+  name             String
+  specialization   String
+  phone            String
+  email            String   @unique
+  consultationFee  Float
+  title            String? // e.g. "Head of Hospital" — shown as a badge wherever doctors are listed
+  schedule         Json? // { days: string[], times: { start: string, end: string } }
+  isActive         Boolean  @default(true)
+  admissions       Admission[]
+  opdVisits        OpdVisit[]
+  prescriptions    Prescription[]
+  userId           Int?     @unique // links to the staff login account for this doctor, if one exists
+  user             User?    @relation(fields: [userId], references: [id])
+}
+
+model Patient {
+  id                Int                @id @default(autoincrement())
+  patientId         String             @unique // app-generated, e.g. ASD-0001
+  name              String
+  phone             String
+  gender            String
+  dateOfBirth       DateTime
+  address           String?
+  bloodGroup        String?
+  createdAt         DateTime           @default(now())
+  admissions        Admission[]
+  opdVisits         OpdVisit[]
+  prescriptions     Prescription[]
+  labInvoices       LabInvoice[]
+  labResults        LabResult[]
+  pharmacyInvoices  PharmacyInvoice[]
+  bills             Bill[]
+  dischargeRecords  DischargeRecord[]
+}
+
+model OpdVisit {
+  id              Int            @id @default(autoincrement())
+  patient         Patient        @relation(fields: [patientId], references: [id])
+  patientId       Int
+  doctor          Doctor         @relation(fields: [doctorId], references: [id])
+  doctorId        Int
+  tokenNumber     Int
+  visitDate       DateTime       @default(now())
+  chiefComplaint  String?
+  doctorFee       Float
+  status          String         @default("WAITING") // WAITING | WITH_DOCTOR | COMPLETE
+  prescriptions   Prescription[]
+}
+
+model Prescription {
+  id                     Int          @id @default(autoincrement())
+  patient                Patient      @relation(fields: [patientId], references: [id])
+  patientId              Int
+  opdVisit               OpdVisit     @relation(fields: [opdVisitId], references: [id])
+  opdVisitId             Int
+  doctor                 Doctor       @relation(fields: [doctorId], references: [id])
+  doctorId               Int
+  medicines              Json // [{ name, dose, frequency, duration, durationUnit, totalQuantity, instructions }]
+  investigations         Json // string[] of abnormal lab finding strings to print on prescription
+  advisedInvestigations  Json         @default("[]") // [{ testId, testName, testCode, price }] — lab tests doctor wants ordered; drives auto lab invoice
+  diagnoses              Json         @default("[]") // string[] — one or more diagnosis names, prints on prescription
+  status                 String       @default("COMPLETE") // COMPLETE | PENDING_INVESTIGATIONS
+  comments               String?
+  createdAt              DateTime     @default(now())
+  labInvoice             LabInvoice?
+}
+
+model CommonDiagnosis {
+  id        Int    @id @default(autoincrement())
+  name      String @unique
+  category  String
+}
+
+model PrescriptionMedicine {
+  id                   Int      @id @default(autoincrement())
+  name                 String
+  genericName          String?
+  category             String?
+  isCustom             Boolean  @default(true)
+  defaultDose          String?
+  defaultFrequency     String?
+  defaultInstructions  String?
+  defaultDuration      String?
+  defaultDurationUnit  String?
+  createdAt            DateTime @default(now())
+}
+
+model Admission {
+  id             Int               @id @default(autoincrement())
+  patient        Patient           @relation(fields: [patientId], references: [id])
+  patientId      Int
+  doctor         Doctor            @relation(fields: [doctorId], references: [id])
+  doctorId       Int
+  tokenNumber    Int
+  admissionDate  DateTime          @default(now())
+  dischargeDate  DateTime?
+  room           Room?             @relation(fields: [roomId], references: [id])
+  roomId         Int?
+  bed            Bed?              @relation(fields: [bedId], references: [id])
+  bedId          Int?
+  status         String            @default("ADMITTED") // ADMITTED | DISCHARGED
+  totalBill      Float             @default(0)
+  labInvoices       LabInvoice[]
+  pharmacyInvoices  PharmacyInvoice[]
+  bills             Bill[]
+  dischargeRecord   DischargeRecord?
+}
+
+model Room {
+  id             Int          @id @default(autoincrement())
+  roomNumber     String       @unique
+  type           String // GENERAL | PRIVATE | ICU
+  totalBeds      Int
+  availableBeds  Int
+  beds           Bed[]
+  admissions     Admission[]
+}
+
+model Bed {
+  id          Int         @id @default(autoincrement())
+  bedNumber   String
+  room        Room        @relation(fields: [roomId], references: [id])
+  roomId      Int
+  isOccupied  Boolean     @default(false)
+  admissions  Admission[]
+
+  @@unique([roomId, bedNumber])
+}
+
+model RoomRate {
+  id        Int      @id @default(autoincrement())
+  roomType  String   @unique // GENERAL | PRIVATE | ICU
+  dailyRate Float
+  updatedAt DateTime @updatedAt
+}
+
+model LabTest {
+  id          Int     @id @default(autoincrement())
+  testName    String
+  testCode    String  @unique
+  price       Float
+  category    String?
+  description String?
+}
+
+model LabInvoice {
+  id              Int          @id @default(autoincrement())
+  patient         Patient      @relation(fields: [patientId], references: [id])
+  patientId       Int
+  admission       Admission?   @relation(fields: [admissionId], references: [id])
+  admissionId     Int?
+  prescription    Prescription? @relation(fields: [prescriptionId], references: [id])
+  prescriptionId  Int?         @unique // set when auto-created from a prescription's advisedInvestigations
+  tests           Json // [{ testId: number, testName: string, testCode: string, price: number }] — snapshotted at creation time
+  totalAmount     Float
+  status          String       @default("PENDING") // PENDING | PAID — payment status, unrelated to LabResult.status
+  createdAt       DateTime     @default(now())
+  labResult       LabResult?
+}
+
+model LabTestTemplate {
+  id         Int    @id @default(autoincrement())
+  testName   String
+  testCode   String @unique // matches LabTest.testCode so a LabInvoice's snapshot can be looked up by code
+  parameters Json // [{ parameterName, unit, normalRangeMin, normalRangeMax, normalRangeText, inputType: "numeric"|"text", options?: string[] }]
+}
+
+model LabResult {
+  id            Int        @id @default(autoincrement())
+  labInvoice    LabInvoice @relation(fields: [labInvoiceId], references: [id])
+  labInvoiceId  Int        @unique
+  patient       Patient    @relation(fields: [patientId], references: [id])
+  patientId     Int
+  technicianId  Int? // User.id of the lab assistant/admin who entered results — no FK relation, resolved by lookup
+  results       Json // [{ testId, testName, parameterName, value, unit, normalRangeMin, normalRangeMax, normalRangeText, inputType, isAbnormal }]
+  status        String     @default("COMPLETED") // PENDING | COMPLETED
+  createdAt     DateTime   @default(now())
+}
+
+model PharmacyItem {
+  id                   Int       @id @default(autoincrement())
+  name                 String    @unique
+  category             String?
+  unit                 String
+  pricePerUnit         Float
+  stockQuantity        Int       @default(0)
+  expiryDate           DateTime?
+  supplier             String?
+  defaultDose          String?
+  defaultFrequency     String?
+  defaultInstructions  String?
+  defaultDuration      String?
+  defaultDurationUnit  String?
+}
+
+model PharmacyInvoice {
+  id           Int        @id @default(autoincrement())
+  patient      Patient?   @relation(fields: [patientId], references: [id])
+  patientId    Int? // optional — walk-in sales have no patient attached
+  admission    Admission? @relation(fields: [admissionId], references: [id])
+  admissionId  Int?
+  items        Json // [{ itemId: number, itemName: string, unit: string, quantity: number, price: number }] — snapshotted at creation time
+  totalAmount  Float
+  status       String     @default("PENDING") // PENDING | PAID — added so in-admission pharmacy charges can be tracked unpaid/paid like lab invoices
+  createdAt    DateTime   @default(now())
+}
+
+model Procedure {
+  id            Int     @id @default(autoincrement())
+  name          String  @unique
+  category      String?
+  defaultPrice  Float
+  description   String?
+  isActive      Boolean @default(true)
+}
+
+model NursingCharge {
+  id            Int     @id @default(autoincrement())
+  name          String  @unique
+  type          String // DAILY | ONETIME | CUSTOM
+  defaultPrice  Float
+  isActive      Boolean @default(true)
+}
+
+model DischargeRecord {
+  id                Int       @id @default(autoincrement())
+  admission         Admission @relation(fields: [admissionId], references: [id])
+  admissionId       Int       @unique
+  patient           Patient   @relation(fields: [patientId], references: [id])
+  patientId         Int
+  dischargeDate     DateTime
+  daysAdmitted      Int
+  roomCharges       Float
+  procedureCharges  Json // [{ procedureId, name, quantity, unitPrice, subtotal }]
+  nursingCharges    Json // [{ nursingChargeId, name, type, quantity, unitPrice, subtotal }]
+  labCharges        Float
+  labInvoiceIds     Json // int[] — ids of the lab invoices actually included in labCharges, so reprints don't pull in invoices excluded at finalize time (e.g. paid ones not overridden)
+  pharmacyCharges   Float
+  pharmacyInvoiceIds Json // int[] — same purpose as labInvoiceIds, for pharmacy invoices
+  doctorFee         Float
+  customCharges     Json // [{ description, amount }]
+  totalBill         Float
+  isPaid            Boolean   @default(false) // Paid / Unpaid status shown on the printed bill
+  notes             String?
+  createdAt         DateTime  @default(now())
+}
+
+model Bill {
+  id               Int        @id @default(autoincrement())
+  patient          Patient    @relation(fields: [patientId], references: [id])
+  patientId        Int
+  admission        Admission? @relation(fields: [admissionId], references: [id])
+  admissionId      Int?
+  doctorFee        Float      @default(0)
+  labCharges       Float      @default(0)
+  pharmacyCharges  Float      @default(0)
+  roomCharges      Float      @default(0)
+  totalAmount      Float
+  isPaid           Boolean    @default(false)
+  createdAt        DateTime   @default(now())
+}

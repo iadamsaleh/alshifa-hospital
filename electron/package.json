@@ -1,0 +1,14 @@
+{
+  "name": "alshifa-electron",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "dev": "cross-env NODE_ENV=development ELECTRON_RUN_AS_NODE= electron .",
+    "start": "cross-env ELECTRON_RUN_AS_NODE= electron ."
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^42.4.1"
+  }
+}
